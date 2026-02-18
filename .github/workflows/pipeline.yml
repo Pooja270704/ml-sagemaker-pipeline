@@ -1,0 +1,31 @@
+name: DEV - Trigger Clinical Pipeline
+
+on:
+  push:
+    branches:
+      - dev
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  trigger-pipeline:
+    runs-on: ubuntu-latest
+    environment: Dev
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Start SageMaker Pipeline
+        run: |
+          aws sagemaker start-pipeline-execution \
+            --pipeline-name ClinicalTrialsPipeline \
+            --pipeline-execution-display-name "dev-${{ github.sha }}"
