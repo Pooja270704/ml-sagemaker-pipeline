@@ -34,8 +34,8 @@ def create_db_engine(secret):
 # -----------------------------
 
 def load_data(engine):
-    trials_df = pd.read_sql("SELECT * FROM clinical_trials", engine)
-    safety_df = pd.read_sql("SELECT * FROM clinical_safety_events", engine)
+    trials_df = pd.read_sql("SELECT * FROM STG_clinical_trials", engine)
+    safety_df = pd.read_sql("SELECT * FROM STG_clinical_safety_events", engine)
     return trials_df, safety_df
 
 
@@ -75,7 +75,7 @@ def transform_data(trials_df, safety_df):
 
 def save_transformed_data(engine, df):
     df.to_sql(
-        "clinical_training_clean",
+        "PSA_clinical_training_clean",
         con=engine,
         if_exists="replace",
         index=False

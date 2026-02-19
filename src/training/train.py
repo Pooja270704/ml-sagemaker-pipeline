@@ -25,7 +25,7 @@ REQUIRED_COLUMNS = [
     "DosageMg",
     "BiomarkerLevel",
     "AdverseEventFlag",
-    "EnrolledDate",
+    "EventDate",
     TARGET_COLUMN,
 ]
 FEATURE_COLUMNS = [
@@ -88,9 +88,9 @@ def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     ]:
         clean[column] = pd.to_numeric(clean[column], errors="coerce")
 
-    clean["EnrolledDate"] = pd.to_datetime(clean["EnrolledDate"], errors="coerce")
-    min_date = clean["EnrolledDate"].dropna().min()
-    clean["EnrollmentDays"] = (clean["EnrolledDate"] - min_date).dt.days
+    clean["EventDate"] = pd.to_datetime(clean["EventDate"], errors="coerce")
+    min_date = clean["EventDate"].dropna().min()
+    clean["EnrollmentDays"] = (clean["EventDate"] - min_date).dt.days
 
     clean = clean.dropna(subset=[TARGET_COLUMN])
     clean = clean.drop_duplicates(subset=["StudyID", "PatientID"], keep="first")
