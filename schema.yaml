@@ -1,0 +1,29 @@
+dataset_name: clinical_severity_prediction
+version: v1.0
+target: Severity
+
+join_keys:
+  - StudyID
+  - PatientID
+  - DrugName
+
+features:
+  categorical:
+    - StudyID
+    - DrugName
+    - Gender
+    - EventType
+    - AgeGroup
+    - BMI_Category
+  numeric:
+    - Age
+    - WeightKg
+    - HeightCm
+    - BMI
+    - DosageMg
+    - BiomarkerLevel
+    - AdverseEventFlag
+    - EnrollmentDays
+    - HighBiomarker
+    - HighDosage
+    - CriticalEvent

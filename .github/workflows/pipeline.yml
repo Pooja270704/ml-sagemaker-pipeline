@@ -5,6 +5,45 @@ on:
     branches:
       - dev
 
+  workflow_dispatch:
+    inputs:
+      trials_source:
+        description: "Trials Source (S3 or DB)"
+        required: false
+        default: "S3"
+        type: choice
+        options:
+          - S3
+          - DB
+
+      trials_format:
+        description: "Trials Format"
+        required: false
+        default: "csv"
+        type: choice
+        options:
+          - csv
+
+      safety_source:
+        description: "Safety Source (S3 or DB)"
+        required: false
+        default: "S3"
+        type: choice
+        options:
+          - S3
+          - DB
+
+      safety_format:
+        description: "Safety Format"
+        required: false
+        default: "json"
+        type: choice
+        options:
+          - json
+
+  schedule:
+    - cron: "0 2 * * 0"   # Every Sunday 2 AM UTC (Auto Retraining)
+
 permissions:
   id-token: write
   contents: read
@@ -24,8 +63,21 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+      - name: Set Default Parameters
+        id: params
+        run: |
+          echo "TRIALS_SOURCE=${{ github.event.inputs.trials_source || 'S3' }}" >> $GITHUB_ENV
+          echo "TRIALS_FORMAT=${{ github.event.inputs.trials_format || 'csv' }}" >> $GITHUB_ENV
+          echo "SAFETY_SOURCE=${{ github.event.inputs.safety_source || 'S3' }}" >> $GITHUB_ENV
+          echo "SAFETY_FORMAT=${{ github.event.inputs.safety_format || 'json' }}" >> $GITHUB_ENV
+
       - name: Start SageMaker Pipeline
         run: |
           aws sagemaker start-pipeline-execution \
-            --pipeline-name ClinicalTrialsPipeline \
-            --pipeline-execution-display-name "dev-${{ github.sha }}"
+            --pipeline-name ClinicalSeverityPipeline \
+            --pipeline-execution-display-name "dev-${{ github.run_id }}" \
+            --pipeline-parameters \
+              Name=TrialsSource,Value=$TRIALS_SOURCE \
+              Name=TrialsFormat,Value=$TRIALS_FORMAT \
+              Name=SafetySource,Value=$SAFETY_SOURCE \
+              Name=SafetyFormat,Value=$SAFETY_FORMAT
