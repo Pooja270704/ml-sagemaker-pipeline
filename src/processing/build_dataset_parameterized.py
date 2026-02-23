@@ -71,10 +71,33 @@ def load_table_from_db(engine, table_name):
 # =========================================================
 
 def clean_trials(df):
-    df["EnrolledDate"] = pd.to_datetime(df["EnrolledDate"], errors="coerce")
-    df = df[df["BMI"].between(15, 50)]
-    df = df.dropna(subset=["BiomarkerLevel"])
-    df = df.drop_duplicates()
+
+    print("Columns available in trials_df:", df.columns.tolist())
+
+    # Convert numeric safely
+    numeric_cols = ["Age", "WeightKg", "HeightCm", "BMI", "DosageMg", "BiomarkerLevel", "AdverseEventFlag"]
+    for c in numeric_cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # Handle EnrolledDate safely
+    if "EnrolledDate" in df.columns:
+        df["EnrolledDate"] = pd.to_datetime(df["EnrolledDate"], errors="coerce")
+        min_date = df["EnrolledDate"].dropna().min()
+        df["EnrollmentDays"] = (df["EnrolledDate"] - min_date).dt.days
+    else:
+        print("⚠ EnrolledDate not found. Creating dummy EnrollmentDays.")
+        df["EnrollmentDays"] = 0
+
+    # Filters only if column exists
+    if "BMI" in df.columns:
+        df = df[df["BMI"].between(15, 50)]
+
+    if "BiomarkerLevel" in df.columns:
+        df = df.dropna(subset=["BiomarkerLevel"])
+
+    df = df.drop_duplicates(subset=["StudyID", "PatientID", "DrugName"], keep="first")
+
     return df
 
 
