@@ -129,7 +129,7 @@ def save_to_db(df, engine, table_name, view_name):
     ist = pytz.timezone("Asia/Kolkata")
     df["load_time"] = datetime.now(ist)
 
-    df.to_sql(table_name, engine, if_exists="append", index=False)
+    df.to_sql(table_name, engine, if_exists="replace", index=False)
 
     view_sql = f"""
         CREATE OR REPLACE VIEW {view_name} AS
