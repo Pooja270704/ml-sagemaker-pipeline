@@ -13,6 +13,7 @@ from sagemaker.model_metrics import ModelMetrics, MetricsSource
 from sagemaker.workflow.step_collections import RegisterModel
 from sagemaker.workflow.condition_step import ConditionStep
 from sagemaker.workflow.conditions import ConditionGreaterThanOrEqualTo
+from sagemaker.workflow.execution_variables import ExecutionVariables
 
 import boto3 
 
@@ -101,7 +102,15 @@ def get_pipeline(
             ProcessingOutput(
                 output_name="processed",
                 source="/opt/ml/processing/output",
-                destination=f"s3://{default_bucket}/clinical/processed/",
+                destination=Join(
+                    on="/",
+                    values=[
+                        f"s3://{default_bucket}",
+                        "clinical",
+                        "processed",
+                        ExecutionVariables.PIPELINE_EXECUTION_ID
+                    ],
+                )
             )
         ],
     )
