@@ -17,7 +17,7 @@ on:
         type: choice
         options:
           - csv
-          - parquet
+          - json
 
       safety_source:
         description: "Safety Source"
@@ -33,7 +33,7 @@ on:
         type: choice
         options:
           - csv
-          - parquet
+          - json
 
 permissions:
   id-token: write
