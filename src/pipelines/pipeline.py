@@ -131,10 +131,16 @@ def get_pipeline(
         name="TrainSeverityModel",
         estimator=estimator,
         inputs={
-            "train": step_build.properties.ProcessingOutputConfig.Outputs[
-                "processed"
-            ].S3Output.S3Uri + "/train.csv"  # Assuming your processing script outputs to /output/train
-        },
+            "train": Join(
+                on="/",
+                values=[
+                    step_build.properties.ProcessingOutputConfig.Outputs[
+                        "processed"
+                    ].S3Output.S3Uri,
+                    "train.csv",
+                ],
+            )
+        }
     )
 
     # =========================================================
@@ -156,9 +162,15 @@ def get_pipeline(
                 destination="/opt/ml/processing/model",
             ),
             ProcessingInput(
-                source=step_build.properties.ProcessingOutputConfig.Outputs[
-                    "processed"
-                ].S3Output.S3Uri + "/test.csv",  # Assuming your processing script outputs to /output/test
+                source=Join(
+                    on="/",
+                    values=[
+                        step_build.properties.ProcessingOutputConfig.Outputs[
+                            "processed"
+                        ].S3Output.S3Uri,
+                        "test.csv",
+                    ],
+                ),
                 destination="/opt/ml/processing/input",
             ),
         ],

@@ -1,0 +1,45 @@
+name: Run Clinical Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      trials_source:
+        description: "Trials Source"
+        required: true
+        type: choice
+        options:
+          - S3
+          - DB
+
+      safety_source:
+        description: "Safety Source"
+        required: true
+        type: choice
+        options:
+          - S3
+          - DB
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    environment: Dev
+
+    steps:
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Start SageMaker Pipeline
+        run: |
+          aws sagemaker start-pipeline-execution \
+            --pipeline-name ClinicalSeverityPipeline \
+            --pipeline-execution-display-name "dev-${{ github.run_id }}" \
+            --pipeline-parameters \
+              Name=TrialsSource,Value=${{ github.event.inputs.trials_source }} \
+              Name=SafetySource,Value=${{ github.event.inputs.safety_source }}
