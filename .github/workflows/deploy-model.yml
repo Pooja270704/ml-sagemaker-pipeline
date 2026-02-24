@@ -1,0 +1,88 @@
+name: Deploy Approved Model
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_version:
+        description: "Model Version Number (e.g., 8)"
+        required: true
+        type: string
+
+      environment:
+        description: "Deployment Environment"
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: Dev
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Deploy Model From SageMaker Registry
+        run: |
+          REGION=${{ secrets.AWS_REGION }}
+          MODEL_GROUP="ClinicalSeverityModelPackageGroup"
+          VERSION=${{ github.event.inputs.model_version }}
+          ENV=${{ github.event.inputs.environment }}
+
+          ENDPOINT_NAME="clinical-severity-${ENV}"
+          MODEL_NAME="clinical-severity-model-${{ github.run_id }}"
+          CONFIG_NAME="clinical-severity-config-${{ github.run_id }}"
+
+          echo "Fetching Model Package ARN..."
+
+          MODEL_PACKAGE_ARN=$(aws sagemaker list-model-packages \
+            --model-package-group-name $MODEL_GROUP \
+            --query "ModelPackageSummaryList[?ModelPackageVersion==\`${VERSION}\`].ModelPackageArn" \
+            --output text)
+
+          if [ -z "$MODEL_PACKAGE_ARN" ]; then
+            echo "Model version not found!"
+            exit 1
+          fi
+
+          echo "Creating SageMaker Model..."
+
+          aws sagemaker create-model \
+            --model-name $MODEL_NAME \
+            --primary-container ModelPackageName=$MODEL_PACKAGE_ARN \
+            --execution-role-arn ${{ secrets.SAGEMAKER_EXECUTION_ROLE }}
+
+          echo "Creating Endpoint Configuration..."
+
+          aws sagemaker create-endpoint-config \
+            --endpoint-config-name $CONFIG_NAME \
+            --production-variants VariantName=AllTraffic,ModelName=$MODEL_NAME,InitialInstanceCount=1,InstanceType=ml.m5.large
+
+          echo "Checking if endpoint exists..."
+
+          if aws sagemaker describe-endpoint --endpoint-name $ENDPOINT_NAME > /dev/null 2>&1; then
+            echo "Updating existing endpoint..."
+            aws sagemaker update-endpoint \
+              --endpoint-name $ENDPOINT_NAME \
+              --endpoint-config-name $CONFIG_NAME
+          else
+            echo "Creating new endpoint..."
+            aws sagemaker create-endpoint \
+              --endpoint-name $ENDPOINT_NAME \
+              --endpoint-config-name $CONFIG_NAME
+          fi
+
+          echo "Deployment triggered successfully."
