@@ -1,5 +1,5 @@
 boto3
-sagemaker
+sagemaker==2.224.0
 pandas
 scikit-learn
 joblib
