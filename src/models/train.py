@@ -32,6 +32,9 @@ def train():
     if TARGET not in df.columns:
         raise ValueError("Target column 'Severity' not found!")
 
+
+    df = df.dropna(subset=[TARGET])
+    
     # Automatically detect features
     feature_columns = [col for col in df.columns if col != TARGET]
 
