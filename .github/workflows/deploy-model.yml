@@ -63,7 +63,7 @@ jobs:
           aws sagemaker create-model \
             --model-name $MODEL_NAME \
             --primary-container ModelPackageName=$MODEL_PACKAGE_ARN \
-            --execution-role-arn ${{ secrets.SAGEMAKER_EXECUTION_ROLE }}
+            --execution-role-arn ${{ secrets.SAGEMAKER_ROLE_ARN }} SAGEMAKER_ROLE_ARN
 
           echo "Creating Endpoint Configuration..."
 
