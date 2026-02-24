@@ -13,6 +13,8 @@ import pandas as pd
 import pytz
 from datetime import datetime
 from sqlalchemy import create_engine, text
+from sklearn.model_selection import train_test_split
+
 
 
 # =========================================================
@@ -383,13 +385,25 @@ def main():
     if engine is not None:
         save_to_db(df, engine, args.ml_ready_table, args.ml_ready_view)
 
-    # --------------------------
-    # Output for training step
-    # --------------------------
-    output_path = "/opt/ml/processing/output/train.csv"
-    df.to_csv(output_path, index=False)
+    
+    # Split dataset properly
+    train_df, test_df = train_test_split(
+        df,
+        test_size=0.3,
+        random_state=42,
+        stratify=df["Severity"]
+    )
 
-    print(f"✅ Dataset saved to {output_path}")
+    # Save train set
+    train_path = "/opt/ml/processing/output/train.csv"
+    train_df.to_csv(train_path, index=False)
+
+    # Save test set
+    test_path = "/opt/ml/processing/output/test.csv"
+    test_df.to_csv(test_path, index=False)
+
+    print(f"✅ Train dataset saved to {train_path}")
+    print(f"✅ Test dataset saved to {test_path}")
     print("======================================")
     print(" BUILD DATASET COMPLETED ")
     print("======================================")

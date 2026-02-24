@@ -133,7 +133,7 @@ def get_pipeline(
         inputs={
             "train": step_build.properties.ProcessingOutputConfig.Outputs[
                 "processed"
-            ].S3Output.S3Uri
+            ].S3Output.S3Uri + "/train.csv"  # Assuming your processing script outputs to /output/train
         },
     )
 
@@ -158,7 +158,7 @@ def get_pipeline(
             ProcessingInput(
                 source=step_build.properties.ProcessingOutputConfig.Outputs[
                     "processed"
-                ].S3Output.S3Uri,
+                ].S3Output.S3Uri + "/test.csv",  # Assuming your processing script outputs to /output/test
                 destination="/opt/ml/processing/input",
             ),
         ],

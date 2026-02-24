@@ -42,7 +42,7 @@ on:
           - json
 
   schedule:
-    - cron: "0 2 * * 0"
+    - cron: "0 2 * * 0"   # Every Sunday 2 AM UTC (Auto Retraining)
 
 permissions:
   id-token: write
@@ -63,24 +63,14 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # ✅ Install dependencies required for pipeline.py
-      - name: Install dependencies
-        run: |
-          pip install sagemaker boto3
-
-      # ✅ IMPORTANT: Deploy / Update Pipeline Definition
-      - name: Deploy / Update SageMaker Pipeline
-        run: |
-          python src/pipelines/pipeline.py
-
       - name: Set Default Parameters
+        id: params
         run: |
           echo "TRIALS_SOURCE=${{ github.event.inputs.trials_source || 'S3' }}" >> $GITHUB_ENV
           echo "TRIALS_FORMAT=${{ github.event.inputs.trials_format || 'csv' }}" >> $GITHUB_ENV
           echo "SAFETY_SOURCE=${{ github.event.inputs.safety_source || 'S3' }}" >> $GITHUB_ENV
           echo "SAFETY_FORMAT=${{ github.event.inputs.safety_format || 'json' }}" >> $GITHUB_ENV
 
-      # ✅ Now start pipeline (with latest code)
       - name: Start SageMaker Pipeline
         run: |
           aws sagemaker start-pipeline-execution \
