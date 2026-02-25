@@ -1,20 +1,9 @@
 name: Deploy Approved Model
 
 on:
-  workflow_dispatch:
-    inputs:
-      model_version:
-        description: "Model Version Number (e.g., 8)"
-        required: true
-        type: string
-
-      environment:
-        description: "Deployment Environment"
-        required: true
-        type: choice
-        options:
-          - dev
-          - prod
+  push:
+    branches:
+      - dev
 
 permissions:
   id-token: write
@@ -25,8 +14,14 @@ jobs:
     runs-on: ubuntu-latest
     environment: Dev
 
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      EXECUTION_ROLE_ARN: ${{ secrets.SAGEMAKER_ROLE_ARN }}
+      MODEL_PACKAGE_GROUP_NAME: ClinicalSeverityModelPackageGroup
+      ENDPOINT_NAME: clinical-severity-dev
+
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Configure AWS Credentials (OIDC)
@@ -37,36 +32,35 @@ jobs:
 
       - name: Deploy Model From SageMaker Registry
         run: |
-          REGION=${{ secrets.AWS_REGION }}
-          MODEL_GROUP="ClinicalSeverityModelPackageGroup"
-          VERSION=${{ github.event.inputs.model_version }}
-          ENV=${{ github.event.inputs.environment }}
+          set -e
 
-          ENDPOINT_NAME="clinical-severity-${ENV}"
-          MODEL_NAME="clinical-severity-model-${{ github.run_id }}"
-          CONFIG_NAME="clinical-severity-config-${{ github.run_id }}"
-
-          echo "Fetching Model Package ARN..."
+          echo "Fetching latest approved model package..."
 
           MODEL_PACKAGE_ARN=$(aws sagemaker list-model-packages \
-            --model-package-group-name $MODEL_GROUP \
-            --query "ModelPackageSummaryList[?ModelPackageVersion==\`${VERSION}\`].ModelPackageArn" \
+            --model-package-group-name $MODEL_PACKAGE_GROUP_NAME \
+            --model-approval-status Approved \
+            --sort-by CreationTime \
+            --sort-order Descending \
+            --query "ModelPackageSummaryList[0].ModelPackageArn" \
             --output text)
 
-          if [ -z "$MODEL_PACKAGE_ARN" ]; then
-            echo "Model version not found!"
+          if [ "$MODEL_PACKAGE_ARN" == "None" ]; then
+            echo "No approved model found."
             exit 1
           fi
 
-          echo "Creating SageMaker Model..."
+          echo "Model Package ARN: $MODEL_PACKAGE_ARN"
 
+          MODEL_NAME="clinical-severity-model-${GITHUB_RUN_NUMBER}"
+          CONFIG_NAME="clinical-severity-config-${GITHUB_RUN_NUMBER}"
+
+          echo "Creating SageMaker model..."
           aws sagemaker create-model \
             --model-name $MODEL_NAME \
             --primary-container ModelPackageName=$MODEL_PACKAGE_ARN \
-            --execution-role-arn ${{ secrets.SAGEMAKER_ROLE_ARN }} SAGEMAKER_ROLE_ARN
+            --execution-role-arn $EXECUTION_ROLE_ARN
 
-          echo "Creating Endpoint Configuration..."
-
+          echo "Creating endpoint configuration..."
           aws sagemaker create-endpoint-config \
             --endpoint-config-name $CONFIG_NAME \
             --production-variants VariantName=AllTraffic,ModelName=$MODEL_NAME,InitialInstanceCount=1,InstanceType=ml.m5.large
