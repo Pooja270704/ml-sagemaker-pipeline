@@ -89,4 +89,4 @@ def output_fn(prediction, content_type):
         "predictions": prediction.tolist()
     }
 
-    return json.dumps(response)
+    return json.dumps(response), "application/json"
