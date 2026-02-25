@@ -14,6 +14,7 @@ from sagemaker.workflow.step_collections import RegisterModel
 from sagemaker.workflow.condition_step import ConditionStep
 from sagemaker.workflow.conditions import ConditionGreaterThanOrEqualTo
 from sagemaker.workflow.execution_variables import ExecutionVariables
+from sagemaker.sklearn.model import SKLearnModel
 
 import boto3
 
@@ -205,21 +206,24 @@ def get_pipeline(
     # =====================================================
     # STEP 4 — Register (With Inference Script)
     # =====================================================
+    sklearn_model = SKLearnModel(
+        model_data=step_train.properties.ModelArtifacts.S3ModelArtifacts,
+        role=role_arn,
+        entry_point="src/models/inference.py",   # VERY IMPORTANT
+        framework_version="1.2-1",
+        sagemaker_session=sm_session,
+    )
+
     step_register = RegisterModel(
         name="RegisterSeverityModel",
-        estimator=estimator,
-        model_data=step_train.properties.ModelArtifacts.S3ModelArtifacts,
-        model_package_group_name=MODEL_PACKAGE_GROUP,
+        model=sklearn_model,
         content_types=["application/json"],
         response_types=["application/json"],
         inference_instances=["ml.m5.large"],
         transform_instances=["ml.m5.large"],
+        model_package_group_name=MODEL_PACKAGE_GROUP,
         approval_status="PendingManualApproval",
         model_metrics=model_metrics,
-
-        # 🔥 THIS FIXES YOUR ENDPOINT HEALTH CHECK
-        entry_point="inference.py",
-        source_dir="src/models",
     )
 
     # =====================================================
