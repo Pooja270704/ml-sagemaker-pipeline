@@ -15,7 +15,7 @@ from sagemaker.workflow.condition_step import ConditionStep
 from sagemaker.workflow.conditions import ConditionGreaterThanOrEqualTo
 from sagemaker.workflow.execution_variables import ExecutionVariables
 
-import boto3 
+import boto3
 
 
 def get_pipeline(
@@ -23,15 +23,17 @@ def get_pipeline(
     role_arn: str,
     default_bucket: str,
     pipeline_name: str = "ClinicalSeverityPipeline",
-    boto_sess = None
+    boto_sess=None,
 ) -> Pipeline:
+
     if boto_sess is None:
         boto_sess = boto3.Session(region_name=region)
+
     sm_session = Session(default_bucket=default_bucket, boto_session=boto_sess)
 
-    # =========================================================
-    # Hardcoded infra config (NOT user parameters)
-    # =========================================================
+    # =====================================================
+    # Fixed infra config
+    # =====================================================
     DEFAULT_BUCKET = "ml-sagemaker-pipeline-demo"
     DEFAULT_TRIALS_KEY = "data/raw/clinical_trials.csv"
     DEFAULT_SAFETY_KEY = "data/raw/clinical_safety_events.json"
@@ -46,19 +48,19 @@ def get_pipeline(
 
     MODEL_PACKAGE_GROUP = "ClinicalSeverityModelPackageGroup"
 
-    # =========================================================
-    # Pipeline parameters (ONLY what user chooses)
-    # =========================================================
-    trials_source = ParameterString(name="TrialsSource", default_value="S3")     # S3 | DB
-    trials_format = ParameterString(name="TrialsFormat", default_value="csv")   # csv | json (validated in script)
-    safety_source = ParameterString(name="SafetySource", default_value="S3")     # S3 | DB
-    safety_format = ParameterString(name="SafetyFormat", default_value="json")  # csv | json (validated in script)
+    # =====================================================
+    # User Parameters
+    # =====================================================
+    trials_source = ParameterString(name="TrialsSource", default_value="S3")
+    trials_format = ParameterString(name="TrialsFormat", default_value="csv")
+    safety_source = ParameterString(name="SafetySource", default_value="S3")
+    safety_format = ParameterString(name="SafetyFormat", default_value="json")
 
     min_accuracy = ParameterFloat(name="MinAccuracy", default_value=0.85)
 
-    # =========================================================
-    # Containers / processors
-    # =========================================================
+    # =====================================================
+    # Processing container
+    # =====================================================
     sklearn_image = sagemaker.image_uris.retrieve(
         framework="sklearn",
         region=region,
@@ -74,9 +76,9 @@ def get_pipeline(
         sagemaker_session=sm_session,
     )
 
-    # =========================================================
-    # Step 1: Build dataset (parameterized source/format)
-    # =========================================================
+    # =====================================================
+    # STEP 1 — Build Dataset
+    # =====================================================
     step_build = ProcessingStep(
         name="BuildDatasetParameterized",
         processor=processing_processor,
@@ -108,18 +110,19 @@ def get_pipeline(
                         f"s3://{default_bucket}",
                         "clinical",
                         "processed",
-                        ExecutionVariables.PIPELINE_EXECUTION_ID
+                        ExecutionVariables.PIPELINE_EXECUTION_ID,
                     ],
-                )
+                ),
             )
         ],
     )
 
-    # =========================================================
-    # Step 2: Train
-    # =========================================================
+    # =====================================================
+    # STEP 2 — Train
+    # =====================================================
     estimator = SKLearn(
-        entry_point="src/models/train.py",
+        entry_point="train.py",
+        source_dir="src/models",      # 🔥 critical
         role=role_arn,
         instance_type="ml.m5.large",
         instance_count=1,
@@ -140,12 +143,12 @@ def get_pipeline(
                     "train.csv",
                 ],
             )
-        }
+        },
     )
 
-    # =========================================================
-    # Step 3: Evaluate
-    # =========================================================
+    # =====================================================
+    # STEP 3 — Evaluate
+    # =====================================================
     evaluation_report = PropertyFile(
         name="SeverityEvaluationReport",
         output_name="evaluation",
@@ -199,9 +202,9 @@ def get_pipeline(
         )
     )
 
-    # =========================================================
-    # Step 4: Register (conditional)
-    # =========================================================
+    # =====================================================
+    # STEP 4 — Register (With Inference Script)
+    # =====================================================
     step_register = RegisterModel(
         name="RegisterSeverityModel",
         estimator=estimator,
@@ -213,11 +216,15 @@ def get_pipeline(
         transform_instances=["ml.m5.large"],
         approval_status="PendingManualApproval",
         model_metrics=model_metrics,
+
+        # 🔥 THIS FIXES YOUR ENDPOINT HEALTH CHECK
+        entry_point="inference.py",
+        source_dir="src/models",
     )
 
-    # =========================================================
-    # Step 5: Condition gate
-    # =========================================================
+    # =====================================================
+    # STEP 5 — Condition Gate
+    # =====================================================
     step_condition = ConditionStep(
         name="RegisterIfAccuracyPasses",
         conditions=[
@@ -248,9 +255,9 @@ def get_pipeline(
     )
 
 
-# =========================================================
-# Local upsert (run once)
-# =========================================================
+# =====================================================
+# Local Upsert
+# =====================================================
 if __name__ == "__main__":
     REGION = "ap-south-1"
     ROLE_ARN = "arn:aws:iam::604860203124:role/SageMaker-Execution-Role"
