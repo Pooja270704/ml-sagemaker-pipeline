@@ -1,9 +1,29 @@
-name: Deploy Approved Model
+name: Deploy Clinical Endpoint
 
 on:
-  push:
-    branches:
-      - dev
+  workflow_dispatch:
+    inputs:
+      endpoint_name:
+        description: "SageMaker Endpoint name (e.g., clinical-severity-dev)"
+        required: true
+        default: "clinical-severity-dev"
+      model_package_group_name:
+        description: "Model Package Group (e.g., ClinicalSeverityModelPackageGroup)"
+        required: true
+        default: "ClinicalSeverityModelPackageGroup"
+      execution_role_arn:
+        description: "SageMaker Execution Role ARN"
+        defaultt: ""
+        required: true
+        default: "arn:aws:iam::604860203124:role/SageMaker-Execution-Role"
+      instance_type:
+        description: "Instance type"
+        required: true
+        default: "ml.m5.large"
+      initial_instance_count:
+        description: "Initial instance count"
+        required: true
+        default: "1"
 
 permissions:
   id-token: write
@@ -14,14 +34,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: Dev
 
-    env:
-      AWS_REGION: ${{ secrets.AWS_REGION }}
-      EXECUTION_ROLE_ARN: ${{ secrets.SAGEMAKER_ROLE_ARN }}
-      MODEL_PACKAGE_GROUP_NAME: ClinicalSeverityModelPackageGroup
-      ENDPOINT_NAME: clinical-severity-dev
-
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Configure AWS Credentials (OIDC)
@@ -30,53 +44,152 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Deploy Model From SageMaker Registry
+      - name: Install jq (needed for parsing AWS CLI output)
         run: |
-          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y jq
 
-          echo "Fetching latest approved model package..."
+      - name: Deploy Model From SageMaker Registry (SAFE + IDPOTENT)
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          ENDPOINT_NAME: ${{ github.event.inputs.endpoint_name }}
+          MODEL_PACKAGE_GROUP_NAME: ${{ github.event.inputs.model_package_group_name }}
+          EXECUTION_ROLE_ARN: ${{ secrets.SAGEMAKER_ROLE_ARN }}
+          INSTANCE_TYPE: ${{ github.event.inputs.instance_type }}
+          INITIAL_INSTANCE_COUNT: ${{ github.event.inputs.initial_instance_count }}
+          RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
 
+          echo "============================================"
+          echo "Region: $AWS_REGION"
+          echo "Endpoint: $ENDPOINT_NAME"
+          echo "Model Package Group: $MODEL_PACKAGE_GROUP_NAME"
+          echo "Execution Role: $EXECUTION_ROLE_ARN"
+          echo "Instance: $INSTANCE_TYPE x $INITIAL_INSTANCE_COUNT"
+          echo "Run ID: $RUN_ID"
+          echo "============================================"
+
+          # 1) Fetch latest APPROVED model package ARN
+          echo "Fetching latest APPROVED model package from group..."
           MODEL_PACKAGE_ARN=$(aws sagemaker list-model-packages \
-            --model-package-group-name $MODEL_PACKAGE_GROUP_NAME \
-            --model-approval-status Approved \
+            --model-package-group-name "$MODEL_PACKAGE_GROUP_NAME" \
             --sort-by CreationTime \
             --sort-order Descending \
-            --query "ModelPackageSummaryList[0].ModelPackageArn" \
-            --output text)
+            --max-results 50 \
+            --region "$AWS_REGION" \
+            | jq -r '.ModelPackageSummaryList[]
+                | select(.ModelPackageStatus=="Completed")
+                | select(.ModelApprovalStatus=="Approved")
+                | .ModelPackageArn' \
+            | head -n 1)
 
-          if [ "$MODEL_PACKAGE_ARN" == "None" ]; then
-            echo "No approved model found."
+          if [[ -z "${MODEL_PACKAGE_ARN}" || "${MODEL_PACKAGE_ARN}" == "null" ]]; then
+            echo "❌ No APPROVED model package found in: $MODEL_PACKAGE_GROUP_NAME"
+            echo "Fix: In SageMaker Model Registry -> approve a model version."
             exit 1
           fi
 
-          echo "Model Package ARN: $MODEL_PACKAGE_ARN"
+          echo "✅ Using Model Package ARN: $MODEL_PACKAGE_ARN"
 
-          MODEL_NAME="clinical-severity-model-${GITHUB_RUN_NUMBER}"
-          CONFIG_NAME="clinical-severity-config-${GITHUB_RUN_NUMBER}"
+          # 2) Decide unique names to avoid collisions
+          MODEL_NAME="${ENDPOINT_NAME}-model-${RUN_ID}"
+          CONFIG_NAME="${ENDPOINT_NAME}-config-${RUN_ID}"
 
+          echo "Model name will be: $MODEL_NAME"
+          echo "Endpoint config will be: $CONFIG_NAME"
+
+          # 3) If endpoint exists and is FAILED -> delete it (AWS cannot update failed endpoints)
+          echo "Checking endpoint status (if it exists)..."
+          ENDPOINT_STATUS=$(aws sagemaker describe-endpoint \
+            --endpoint-name "$ENDPOINT_NAME" \
+            --region "$AWS_REGION" \
+            --query 'EndpointStatus' \
+            --output text 2>/dev/null || true)
+
+          if [[ -n "${ENDPOINT_STATUS}" && "${ENDPOINT_STATUS}" != "None" ]]; then
+            echo "Endpoint exists. Current status: ${ENDPOINT_STATUS}"
+
+            if [[ "${ENDPOINT_STATUS}" == "Failed" ]]; then
+              echo "⚠️ Endpoint is FAILED. Deleting it (required by AWS before redeploy)..."
+              aws sagemaker delete-endpoint \
+                --endpoint-name "$ENDPOINT_NAME" \
+                --region "$AWS_REGION"
+
+              echo "Waiting for endpoint deletion..."
+              aws sagemaker wait endpoint-deleted \
+                --endpoint-name "$ENDPOINT_NAME" \
+                --region "$AWS_REGION"
+              echo "✅ Failed endpoint deleted."
+            fi
+          else
+            echo "Endpoint does not exist yet."
+          fi
+
+          # 4) Create SageMaker model from Model Package
+          # (If model name somehow exists, delete and recreate)
           echo "Creating SageMaker model..."
+          if aws sagemaker describe-model --model-name "$MODEL_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+            echo "⚠️ Model name already exists (unexpected). Deleting: $MODEL_NAME"
+            aws sagemaker delete-model --model-name "$MODEL_NAME" --region "$AWS_REGION"
+          fi
+
           aws sagemaker create-model \
-            --model-name $MODEL_NAME \
-            --primary-container ModelPackageName=$MODEL_PACKAGE_ARN \
-            --execution-role-arn $EXECUTION_ROLE_ARN
+            --model-name "$MODEL_NAME" \
+            --execution-role-arn "$EXECUTION_ROLE_ARN" \
+            --primary-container "ModelPackageName=$MODEL_PACKAGE_ARN" \
+            --region "$AWS_REGION" >/dev/null
 
-          echo "Creating endpoint configuration..."
+          echo "✅ Model created: $MODEL_NAME"
+
+          # 5) Create endpoint config
+          # (If config name exists, delete and recreate)
+          echo "Creating endpoint config..."
+          if aws sagemaker describe-endpoint-config --endpoint-config-name "$CONFIG_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+            echo "⚠️ Endpoint config already exists. Deleting: $CONFIG_NAME"
+            aws sagemaker delete-endpoint-config --endpoint-config-name "$CONFIG_NAME" --region "$AWS_REGION"
+          fi
+
           aws sagemaker create-endpoint-config \
-            --endpoint-config-name $CONFIG_NAME \
-            --production-variants VariantName=AllTraffic,ModelName=$MODEL_NAME,InitialInstanceCount=1,InstanceType=ml.m5.large
+            --endpoint-config-name "$CONFIG_NAME" \
+            --production-variants "VariantName=AllTraffic,ModelName=$MODEL_NAME,InitialInstanceCount=$INITIAL_INSTANCE_COUNT,InstanceType=$INSTANCE_TYPE,InitialVariantWeight=1.0" \
+            --region "$AWS_REGION" >/dev/null
 
-          echo "Checking if endpoint exists..."
+          echo "✅ Endpoint config created: $CONFIG_NAME"
 
-          if aws sagemaker describe-endpoint --endpoint-name $ENDPOINT_NAME > /dev/null 2>&1; then
-            echo "Updating existing endpoint..."
+          # 6) Create or Update endpoint
+          ENDPOINT_EXISTS=$(aws sagemaker describe-endpoint \
+            --endpoint-name "$ENDPOINT_NAME" \
+            --region "$AWS_REGION" >/dev/null 2>&1 && echo "yes" || echo "no")
+
+          if [[ "$ENDPOINT_EXISTS" == "yes" ]]; then
+            echo "Updating existing endpoint to new config..."
             aws sagemaker update-endpoint \
-              --endpoint-name $ENDPOINT_NAME \
-              --endpoint-config-name $CONFIG_NAME
+              --endpoint-name "$ENDPOINT_NAME" \
+              --endpoint-config-name "$CONFIG_NAME" \
+              --region "$AWS_REGION" >/dev/null
+            echo "✅ Update triggered."
           else
             echo "Creating new endpoint..."
             aws sagemaker create-endpoint \
-              --endpoint-name $ENDPOINT_NAME \
-              --endpoint-config-name $CONFIG_NAME
+              --endpoint-name "$ENDPOINT_NAME" \
+              --endpoint-config-name "$CONFIG_NAME" \
+              --region "$AWS_REGION" >/dev/null
+            echo "✅ Create triggered."
           fi
 
-          echo "Deployment triggered successfully."
+          # 7) Wait until endpoint is InService (or fail)
+          echo "Waiting for endpoint to reach InService..."
+          aws sagemaker wait endpoint-in-service \
+            --endpoint-name "$ENDPOINT_NAME" \
+            --region "$AWS_REGION"
+
+          FINAL_STATUS=$(aws sagemaker describe-endpoint \
+            --endpoint-name "$ENDPOINT_NAME" \
+            --region "$AWS_REGION" \
+            --query 'EndpointStatus' \
+            --output text)
+
+          echo "✅ Endpoint final status: $FINAL_STATUS"
+          echo "Deployment completed successfully."
