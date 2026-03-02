@@ -1,0 +1,45 @@
+name: Run Ingestion Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Data Source"
+        required: true
+        type: choice
+        options:
+          - S3
+          - DB
+
+      file_format:
+        description: "File Format"
+        required: true
+        type: choice
+        options:
+          - csv
+          - json
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    environment: Dev
+
+    steps:
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Start Ingestion Pipeline
+        run: |
+          aws sagemaker start-pipeline-execution \
+            --pipeline-name ClinicalIngestionPipeline \
+            --pipeline-execution-display-name "ingestion-${{ github.run_id }}" \
+            --pipeline-parameters \
+              Name=Source,Value=${{ github.event.inputs.source }} \
+              Name=FileFormat,Value=${{ github.event.inputs.file_format }}
