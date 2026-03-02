@@ -18,12 +18,10 @@ def get_pipeline(
     sm_session = Session(default_bucket=default_bucket, boto_session=boto_sess)
 
     # ======================
-    # PIPELINE PARAMETERS
+    # ONLY BUSINESS PARAMETERS
     # ======================
     source_param = ParameterString(name="Source", default_value="DB")
     format_param = ParameterString(name="FileFormat", default_value="csv")
-    region_param = ParameterString(name="Region", default_value=region)
-    secret_param = ParameterString(name="DBSecretName", default_value="your-secret-name")
 
     # ======================
     # PROCESSOR
@@ -43,16 +41,11 @@ def get_pipeline(
         sagemaker_session=sm_session,
     )
 
-    # ======================
-    # PROCESSING STEP
-    # ======================
     step_ingestion = ProcessingStep(
         name="IngestionStep",
         processor=processor,
-        code="src/pipelines/ingestion_pipeline.py",  # IMPORTANT
+        code="src/pipelines/ingestion_pipeline.py",
         job_arguments=[
-            "--region", region_param,
-            "--db_secret_name", secret_param,
             "--source", source_param,
             "--file_format", format_param,
         ],
@@ -60,7 +53,7 @@ def get_pipeline(
 
     return Pipeline(
         name=pipeline_name,
-        parameters=[source_param, format_param, region_param, secret_param],
+        parameters=[source_param, format_param],
         steps=[step_ingestion],
         sagemaker_session=sm_session,
     )

@@ -6,7 +6,6 @@ subprocess.check_call(
      "boto3", "pandas", "sqlalchemy==1.4.46", "pymysql", "pytz"]
 )
 
-
 import argparse
 import json
 import boto3
@@ -15,24 +14,27 @@ from datetime import datetime
 from sqlalchemy import create_engine, text
 from io import StringIO
 
+
 # ==========================
-# ARGUMENTS
+# INFRA CONFIG (NOT PARAMETERS)
+# ==========================
+REGION = boto3.Session().region_name or "ap-south-1"
+SECRET_NAME = "abalone-db-app-secret"
+
+
+# ==========================
+# ARGUMENTS (ONLY BUSINESS PARAMS)
 # ==========================
 parser = argparse.ArgumentParser()
 
-parser.add_argument("--region", required=True)
-parser.add_argument("--db_secret_name", required=True)
 parser.add_argument("--source", required=True)        # DB or S3
 parser.add_argument("--file_format", required=True)   # csv or json
-parser.add_argument("--raw_bucket", required=False)
-parser.add_argument("--file_key", required=False)
 
 args = parser.parse_args()
 
-REGION = args.region
-SECRET_NAME = args.db_secret_name
 SOURCE = args.source.upper()
 FILE_FORMAT = args.file_format.lower()
+
 
 # ==========================
 # SECRETS + DB ENGINE
@@ -41,6 +43,7 @@ def get_secret(secret_name, region):
     client = boto3.client("secretsmanager", region_name=region)
     response = client.get_secret_value(SecretId=secret_name)
     return json.loads(response["SecretString"])
+
 
 def build_engine():
     secret = get_secret(SECRET_NAME, REGION)
@@ -52,7 +55,9 @@ def build_engine():
 
     return create_engine(conn_str, pool_pre_ping=True)
 
+
 engine = build_engine()
+
 
 # ==========================
 # LOAD RAW DATA
@@ -89,6 +94,7 @@ def load_from_db():
     else:
         raise ValueError("Unsupported file format.")
 
+
 def load_from_s3():
 
     s3 = boto3.client("s3", region_name=REGION)
@@ -105,10 +111,11 @@ def load_from_s3():
         key = "data/raw/clinical_safety_events.json"
         obj = s3.get_object(Bucket=bucket, Key=key)
         content = obj["Body"].read().decode("utf-8")
-        return pd.read_json(StringIO(content))
+        return pd.read_json(StringIO(content), lines=True)
+
 
 # ==========================
-# INSERT INTO STG (AUTO-CREATE)
+# INSERT INTO STG
 # ==========================
 def insert_to_stg(df):
 
@@ -127,8 +134,9 @@ def insert_to_stg(df):
         index=False
     )
 
+
 # ==========================
-# TRANSFORM TO PSA (DEDUP SAFE)
+# TRANSFORM TO PSA
 # ==========================
 def transform_to_psa():
 
@@ -155,13 +163,11 @@ def transform_to_psa():
 
     with engine.begin() as conn:
 
-        # 1️⃣ Create PSA table if not exists
         conn.execute(text(f"""
             CREATE TABLE IF NOT EXISTS ml_layer.{psa_table}
             LIKE ml_layer.{stg_table};
         """))
 
-        # 2️⃣ Insert only new rows (dedup)
         conn.execute(text(f"""
             INSERT INTO ml_layer.{psa_table}
             SELECT s.* FROM ml_layer.{stg_table} s
@@ -171,14 +177,12 @@ def transform_to_psa():
             );
         """))
 
-        # 3️⃣ Create or Replace PSA View with Load Time
         conn.execute(text(f"""
             CREATE OR REPLACE VIEW ml_layer.{view_name} AS
-            SELECT 
-                p.*,
-                CURRENT_TIMESTAMP AS load_time
+            SELECT p.*, CURRENT_TIMESTAMP AS load_time
             FROM ml_layer.{psa_table} p;
         """))
+
 
 # ==========================
 # MAIN
@@ -189,10 +193,8 @@ if __name__ == "__main__":
 
     if SOURCE == "DB":
         df = load_from_db()
-
     elif SOURCE == "S3":
         df = load_from_s3()
-
     else:
         raise ValueError("Invalid source. Use DB or S3.")
 

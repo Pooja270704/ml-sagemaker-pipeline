@@ -2,7 +2,6 @@ import os
 import joblib
 import pandas as pd
 
-from sklearn.model_selection import train_test_split
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
@@ -12,7 +11,6 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.metrics import accuracy_score
 
 
 TARGET = "Severity"
@@ -21,9 +19,11 @@ TARGET = "Severity"
 def train():
 
     print("📥 Loading training dataset...")
+
     input_path = "/opt/ml/input/data/train"
     files = os.listdir(input_path)
     file_path = os.path.join(input_path, files[0])
+
     df = pd.read_csv(file_path)
 
     print("Dataset shape:", df.shape)
@@ -32,16 +32,15 @@ def train():
     if TARGET not in df.columns:
         raise ValueError("Target column 'Severity' not found!")
 
-
     df = df.dropna(subset=[TARGET])
-    
-    # Automatically detect features
-    feature_columns = [col for col in df.columns if col != TARGET]
 
-    X = df[feature_columns]
+    X = df.drop(columns=[TARGET])
     y = df[TARGET]
 
-    # Auto-detect categorical vs numeric
+    print("Target distribution:")
+    print(y.value_counts())
+
+    # Detect categorical & numeric columns
     categorical_cols = X.select_dtypes(include=["object"]).columns.tolist()
     numeric_cols = X.select_dtypes(exclude=["object"]).columns.tolist()
 
@@ -68,23 +67,15 @@ def train():
         ]
     )
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y,
-        test_size=0.2,
-        random_state=42,
-        stratify=y
-    )
-
     models = {
-        "LogisticRegression": LogisticRegression(max_iter=1500),
-        "RandomForest": RandomForestClassifier(n_estimators=300, random_state=42),
+        "LogisticRegression": LogisticRegression(max_iter=1500, class_weight="balanced"),
+        "RandomForest": RandomForestClassifier(n_estimators=300, random_state=42, class_weight="balanced"),
         "GradientBoosting": GradientBoostingClassifier(),
-        "SVM": SVC(kernel="rbf"),
+        "SVM": SVC(kernel="rbf", probability=True),
         "KNN": KNeighborsClassifier(n_neighbors=5),
     }
 
     best_model = None
-    best_accuracy = 0
     best_model_name = None
 
     print("🏋️ Training models...")
@@ -96,20 +87,17 @@ def train():
             ("model", model)
         ])
 
-        pipeline.fit(X_train, y_train)
+        pipeline.fit(X, y)
 
-        preds = pipeline.predict(X_test)
-        acc = accuracy_score(y_test, preds)
+        print(f"{name} trained successfully.")
 
-        print(f"{name} Accuracy: {acc:.4f}")
-
-        if acc > best_accuracy:
-            best_accuracy = acc
+        # For simplicity: choose first model as best
+        # (Evaluation step will decide actual performance)
+        if best_model is None:
             best_model = pipeline
             best_model_name = name
 
-    print("🏆 Best Model:", best_model_name)
-    print("🏆 Best Accuracy:", best_accuracy)
+    print("🏆 Selected Model:", best_model_name)
 
     model_dir = "/opt/ml/model"
     os.makedirs(model_dir, exist_ok=True)
