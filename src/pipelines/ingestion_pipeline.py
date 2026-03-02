@@ -1,25 +1,23 @@
 import subprocess
 import sys
 
-# Install required libraries inside processing container
 subprocess.check_call(
     [sys.executable, "-m", "pip", "install",
      "boto3", "pandas", "sqlalchemy==1.4.46", "pymysql", "pytz"]
 )
 
+
 import argparse
 import json
 import boto3
 import pandas as pd
-import pytz
 from datetime import datetime
 from sqlalchemy import create_engine, text
 from io import StringIO
 
-
-# =========================================================
+# ==========================
 # ARGUMENTS
-# =========================================================
+# ==========================
 parser = argparse.ArgumentParser()
 
 parser.add_argument("--region", required=True)
@@ -36,17 +34,13 @@ SECRET_NAME = args.db_secret_name
 SOURCE = args.source.upper()
 FILE_FORMAT = args.file_format.lower()
 
-IST = pytz.timezone("Asia/Kolkata")
-
-
-# =========================================================
-# DB CONNECTION
-# =========================================================
+# ==========================
+# SECRETS + DB ENGINE
+# ==========================
 def get_secret(secret_name, region):
     client = boto3.client("secretsmanager", region_name=region)
     response = client.get_secret_value(SecretId=secret_name)
     return json.loads(response["SecretString"])
-
 
 def build_engine():
     secret = get_secret(SECRET_NAME, REGION)
@@ -55,135 +49,157 @@ def build_engine():
         f"mysql+pymysql://{secret['username']}:{secret['password']}"
         f"@{secret['host']}:{secret['port']}/{secret['dbname']}"
     )
-    return create_engine(conn_str, pool_pre_ping=True)
 
+    return create_engine(conn_str, pool_pre_ping=True)
 
 engine = build_engine()
 
-
-# =========================================================
-# LOAD DATA
-# =========================================================
+# ==========================
+# LOAD RAW DATA
+# ==========================
 def load_from_db():
-    if FILE_FORMAT == "csv":
-        return pd.read_sql("SELECT raw_csv FROM source_layer.STG_clinical_trials", engine)
-    else:
-        return pd.read_sql("SELECT raw_json FROM source_layer.STG_clinical_safety_events", engine)
 
+    if FILE_FORMAT == "csv":
+        query = "SELECT raw_csv FROM source_layer.STG_clinical_trials"
+        df_raw = pd.read_sql(query, engine)
+
+        if df_raw.empty:
+            raise ValueError("No CSV data found in source_layer.")
+
+        combined = "\n".join(df_raw["raw_csv"].tolist())
+
+        header = (
+            "StudyID,PatientID,DrugName,Age,Gender,WeightKg,HeightCm,"
+            "BMI,DosageMg,BiomarkerLevel,AdverseEventFlag,EnrolledDate"
+        )
+
+        final_csv = header + "\n" + combined
+        return pd.read_csv(StringIO(final_csv))
+
+    elif FILE_FORMAT == "json":
+        query = "SELECT raw_json FROM source_layer.STG_clinical_safety_events"
+        df_raw = pd.read_sql(query, engine)
+
+        if df_raw.empty:
+            raise ValueError("No JSON data found in source_layer.")
+
+        combined = "\n".join(df_raw["raw_json"].tolist())
+        return pd.read_json(StringIO(combined), lines=True)
+
+    else:
+        raise ValueError("Unsupported file format.")
 
 def load_from_s3():
+
     s3 = boto3.client("s3", region_name=REGION)
-    obj = s3.get_object(Bucket=args.raw_bucket, Key=args.file_key)
-    content = obj["Body"].read().decode("utf-8")
+
+    bucket = "ml-sagemaker-pipeline-demo"
 
     if FILE_FORMAT == "csv":
-        return pd.DataFrame({"raw_csv": content.splitlines()})
-    else:
-        return pd.DataFrame({"raw_json": content.splitlines()})
+        key = "data/raw/clinical_trials.csv"
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        content = obj["Body"].read().decode("utf-8")
+        return pd.read_csv(StringIO(content))
 
+    elif FILE_FORMAT == "json":
+        key = "data/raw/clinical_safety_events.json"
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        content = obj["Body"].read().decode("utf-8")
+        return pd.read_json(StringIO(content))
 
-# =========================================================
-# STG INSERT (Append Only)
-# =========================================================
+# ==========================
+# INSERT INTO STG (AUTO-CREATE)
+# ==========================
 def insert_to_stg(df):
 
-    stg_table = "STG_clinical_trials" if FILE_FORMAT == "csv" else "STG_clinical_safety_events"
-    column_name = "raw_csv" if FILE_FORMAT == "csv" else "raw_json"
+    if FILE_FORMAT == "csv":
+        table_name = "STG_clinical_trials"
+    else:
+        table_name = "STG_clinical_safety_events"
 
-    df["created_at"] = datetime.now(IST)
+    df["created_at"] = datetime.utcnow()
 
     df.to_sql(
-        stg_table,
+        table_name,
         engine,
         schema="ml_layer",
         if_exists="append",
         index=False
     )
 
-    print(f"✅ Inserted into ml_layer.{stg_table}")
-
-
-# =========================================================
-# STG -> PSA (Business Key Dedup)
-# =========================================================
+# ==========================
+# TRANSFORM TO PSA (DEDUP SAFE)
+# ==========================
 def transform_to_psa():
 
     if FILE_FORMAT == "csv":
-        stg_table = "ml_layer.STG_clinical_trials"
+        stg_table = "STG_clinical_trials"
         psa_table = "PSA_clinical_trials"
         view_name = "PSA_clinical_trials_view"
 
         dedup_condition = """
             p.StudyID = s.StudyID
             AND p.PatientID = s.PatientID
-            AND p.DrugName = s.DrugName
         """
 
     else:
-        stg_table = "ml_layer.STG_clinical_safety_events"
+        stg_table = "STG_clinical_safety_events"
         psa_table = "PSA_clinical_safety_events"
         view_name = "PSA_clinical_safety_events_view"
 
         dedup_condition = """
             p.StudyID = s.StudyID
             AND p.PatientID = s.PatientID
-            AND p.DrugName = s.DrugName
             AND p.EventType = s.EventType
         """
 
     with engine.begin() as conn:
 
-        # Create PSA table if not exists (structured copy)
+        # 1️⃣ Create PSA table if not exists
         conn.execute(text(f"""
             CREATE TABLE IF NOT EXISTS ml_layer.{psa_table}
-            LIKE {stg_table};
+            LIKE ml_layer.{stg_table};
         """))
 
-        # Insert only new records
+        # 2️⃣ Insert only new rows (dedup)
         conn.execute(text(f"""
             INSERT INTO ml_layer.{psa_table}
-            SELECT s.*
-            FROM {stg_table} s
+            SELECT s.* FROM ml_layer.{stg_table} s
             WHERE NOT EXISTS (
                 SELECT 1 FROM ml_layer.{psa_table} p
                 WHERE {dedup_condition}
             );
         """))
 
-        # Create / Replace View
+        # 3️⃣ Create or Replace PSA View with Load Time
         conn.execute(text(f"""
             CREATE OR REPLACE VIEW ml_layer.{view_name} AS
-            SELECT *,
-                   CONVERT_TZ(NOW(), 'UTC', 'Asia/Kolkata') AS load_time
-            FROM ml_layer.{psa_table};
+            SELECT 
+                p.*,
+                CURRENT_TIMESTAMP AS load_time
+            FROM ml_layer.{psa_table} p;
         """))
 
-    print(f"✅ PSA updated: ml_layer.{psa_table}")
-    print(f"✅ View updated: ml_layer.{view_name}")
-
-
-# =========================================================
+# ==========================
 # MAIN
-# =========================================================
+# ==========================
 if __name__ == "__main__":
 
-    print("===================================")
-    print(" INGESTION PIPELINE STARTED ")
-    print("===================================")
+    print("=== Starting Ingestion Pipeline ===")
 
     if SOURCE == "DB":
         df = load_from_db()
+
     elif SOURCE == "S3":
         df = load_from_s3()
+
     else:
-        raise ValueError("Source must be DB or S3")
+        raise ValueError("Invalid source. Use DB or S3.")
 
     if df.empty:
-        raise ValueError("No data found in source")
+        raise ValueError("No data found after loading.")
 
     insert_to_stg(df)
     transform_to_psa()
 
-    print("===================================")
-    print(" INGESTION COMPLETED SUCCESSFULLY ")
-    print("===================================")
+    print("=== Ingestion Completed Successfully ===")
