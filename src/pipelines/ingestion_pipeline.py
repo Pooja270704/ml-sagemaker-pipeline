@@ -92,21 +92,21 @@ def load_from_db():
 
 def load_from_s3():
 
-    if not args.raw_bucket or not args.file_key:
-        raise ValueError("S3 bucket and file key must be provided for S3 source.")
-
     s3 = boto3.client("s3", region_name=REGION)
-    obj = s3.get_object(Bucket=args.raw_bucket, Key=args.file_key)
-    content = obj["Body"].read().decode("utf-8")
+
+    bucket = "ml-sagemaker-pipeline-demo"
 
     if FILE_FORMAT == "csv":
+        key = "data/raw/clinical_trials.csv"
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        content = obj["Body"].read().decode("utf-8")
         return pd.read_csv(StringIO(content))
 
     elif FILE_FORMAT == "json":
-        return pd.read_json(StringIO(content), lines=True)
-
-    else:
-        raise ValueError("Unsupported file format.")
+        key = "data/raw/clinical_safety_events.json"
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        content = obj["Body"].read().decode("utf-8")
+        return pd.read_json(StringIO(content))
 
 # ==========================
 # INSERT INTO STG (AUTO-CREATE)
