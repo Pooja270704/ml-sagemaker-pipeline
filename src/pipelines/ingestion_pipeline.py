@@ -1,3 +1,13 @@
+import subprocess
+import sys
+
+subprocess.check_call(
+    [sys.executable, "-m", "pip", "install",
+     "boto3", "pandas", "sqlalchemy==1.4.46", "pymysql", "pytz"]
+)
+
+
+
 import argparse
 import json
 import boto3
