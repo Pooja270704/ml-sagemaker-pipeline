@@ -1,3 +1,4 @@
+sqlachemy==1.4.46
 boto3
 sagemaker==2.224.0
 pandas
